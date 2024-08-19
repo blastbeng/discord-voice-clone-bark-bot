@@ -1,6 +1,8 @@
 import discord
 import logging
 import sys
+import subprocess
+import shlex
 from os.path import join, dirname
 from pathlib import Path
 from dotenv import load_dotenv, set_key
@@ -28,6 +30,7 @@ from transformers import AutoProcessor, BarkModel
 from typing import List
 import torchaudio
 import torch
+from discord.opus import Encoder
 from io import BytesIO
 
 from hubert.hubert_manager import HuBERTManager
@@ -67,7 +70,7 @@ class FFmpegPCMAudioBytesIO(discord.AudioSource):
         self._process = None
         try:
             self._process = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr)
-            self._stdout = io.BytesIO(
+            self._stdout = BytesIO(
                 self._process.communicate(input=stdin)[0]
             )
         except FileNotFoundError:
@@ -136,7 +139,7 @@ def talk(voice_name, text_prompt):
   #sound.export(out, format='mp3', bitrate="256k")
   #out.seek(0)
 
-  return bytes_io
+  return result_bytes
 
 
 async def rps_autocomplete(interaction: discord.Interaction, current: str) -> List[app_commands.Choice[str]]:
@@ -175,14 +178,23 @@ async def connect_bot_by_voice_client(voice_client, channel, guild, member=None)
         fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
         logging.error("%s %s %s", exc_type, fname, exc_tb.tb_lineno, exc_info=1)
 
-async def send_error(e, interaction):
+async def send_error(e, interaction, from_generic=False):
     if isinstance(e, app_commands.CommandOnCooldown):
-        await interaction.followup.send("Per favore non spammare.", ephemeral = True)  
+        command = str(interaction.data['name'])
+        cooldown = command + ' -> Cooldown: ' + str(e.cooldown.per) + '[' + str(round(e.retry_after, 2)) + ']s'
+        spammsg = 'Per favore non spammare.\n' + cooldown
+        if from_generic:
+            await interaction.response.send_message(spammsg, ephemeral = True)
+        else:
+            await interaction.followup.send(spammsg, ephemeral = True)  
     else:
         exc_type, exc_obj, exc_tb = sys.exc_info()
         fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
         logging.error("%s %s %s", exc_type, fname, exc_tb.tb_lineno, e.args[0])
-        await interaction.followup.send("Si é verificato un errore.", ephemeral = True)  
+        if from_generic:
+            await interaction.response.send_message("Si é verificato un errore.", ephemeral = True)
+        else:
+            await interaction.followup.send("Si é verificato un errore.", ephemeral = True)  
 
 def get_voice_client_by_guildid(voice_clients, guildid):
     for vc in voice_clients:
@@ -201,6 +213,32 @@ async def on_guild_available(guild):
         fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
         logging.error("%s %s %s", exc_type, fname, exc_tb.tb_lineno, exc_info=1)
 
+async def on_voice_state_update(member, before, after):
+    try:
+        if member.bot and member.id == client.user.id:
+            voice_client = get_voice_client_by_guildid(client.voice_clients, member.guild.id)
+            if voice_client:
+                if voice_client.is_playing():
+                    voice_client.stop()
+                if before.channel is not None and after.channel is not None and before.channel.id != after.channel.id:
+                    await voice_client.disconnect()
+        elif member.guild.id in loops_dict and loops_dict[member.guild.id].play_audio_loop.is_running():
+            if before.channel is not None and after.channel is not None and before.channel.id != after.channel.id:
+                voice_client = get_voice_client_by_guildid(client.voice_clients, member.guild.id)
+
+                perms = after.channel.permissions_for(after.channel.guild.me)
+                if (perms.administrator or perms.speak):
+                    #if voice_client:
+                    #    await voice_client.disconnect()
+                    await connect_bot_by_voice_client(voice_client, after.channel, None, member=member)
+            elif before.channel is None and after.channel is not None:
+                voice_client = get_voice_client_by_guildid(client.voice_clients, member.guild.id)
+                await connect_bot_by_voice_client(voice_client, after.channel, None, member=member)
+    except Exception as e:
+        exc_type, exc_obj, exc_tb = sys.exc_info()
+        fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
+        logging.error("%s %s %s", exc_type, fname, exc_tb.tb_lineno, exc_info=1)
+
 @client.tree.command()
 @app_commands.rename(username='username')
 @app_commands.describe(username="Il nome dell'user da clonare")
@@ -208,28 +246,23 @@ async def on_guild_available(guild):
 @app_commands.describe(audio="L'audio da clonare")
 @app_commands.checks.cooldown(1, 60.0, key=lambda i: (i.user.id))
 async def clone(interaction: discord.Interaction, username: str, audio: discord.Attachment):
-    """Clona una voce."""
+    """Clona una voce. Nota: ad ogni riavvio del bot le voci clonate verranno eliminate."""
     try:
         await interaction.response.defer(thinking=True, ephemeral=True)
-        if not utils.allowed_wav(audio.filename):
+        if not allowed_wav(audio.filename):
             await interaction.followup.send("Devi caricare un file wav se vuoi clonare una voce.", ephemeral = True)     
         else:
-        
-            url = get_api_url() + os.environ.get("API_PATH_DATABASE") + "/upload/trainfile/txt"
-            form_data = {'chatid': str(currentguildid),
-                        'lang': utils.get_guild_language(currentguildid)
-                        }
             audiofile = await audio.to_file()
             filepath = os.environ.get("TMP_DIR") + username + ".wav"
             with open(filepath, 'wb') as filewrite:
                 filewrite.write(audiofile.fp.getbuffer())
             
-            voice.voice_clone(username, filepath)
+            voice_clone(username, filepath)
             if os.path.exists(filepath):
                 os.remove(filepath)
             await interaction.followup.send("Voce clonata!\nRicorda che prossimo riavvio del bot tutte le voci clonate verranno eliminate.", ephemeral = True)  
     except Exception as e:
-        send_error(interaction, e)
+        await send_error(e, interaction)
 
 @client.tree.command()
 @app_commands.rename(text='text')
@@ -239,7 +272,7 @@ async def clone(interaction: discord.Interaction, username: str, audio: discord.
 @app_commands.autocomplete(voice=rps_autocomplete)
 @app_commands.checks.cooldown(1, 60.0, key=lambda i: (i.user.id))
 async def speak(interaction: discord.Interaction, text: str, voice: str):
-    """Parla"""
+    """Parla. Nota: ad ogni riavvio del bot le voci clonate verranno eliminate."""
     try:
         await interaction.response.defer(thinking=True, ephemeral=True)    
 
@@ -247,19 +280,19 @@ async def speak(interaction: discord.Interaction, text: str, voice: str):
         await connect_bot_by_voice_client(voice_client, interaction.user.voice.channel, interaction.guild)
                  
         if not voice_client:
-            await interaction.followup.send("Sto entrando nel canale vocale, se qualcosa non dovesse funzionare usa prima /join!", ephemeral = True)  
+            await interaction.followup.send("Sto entrando nel canale vocale, uso /join al posto tuo, ricordati di farlo la prossima volta prima di usare speak!", ephemeral = True)  
         else:
             if voice_client.is_playing():
                 voice_client.stop()
             
-            voice_client.play(FFmpegPCMAudioBytesIO(talk(voice, text), pipe=True), after=lambda e: logging.info("do_play - " + message))
+            voice_client.play(FFmpegPCMAudioBytesIO(talk(voice, text), pipe=True), after=lambda e: logging.info("Playing audio - " + text))
         
             await interaction.followup.send(text, ephemeral = True)  
     except Exception as e:
-        send_error(interaction, e)
+        await send_error(e, interaction)
 
 @client.tree.command()
-@app_commands.checks.cooldown(1, 5.0, key=lambda i: (i.user.id))
+@app_commands.checks.cooldown(1, 10.0, key=lambda i: (i.user.id))
 async def join(interaction: discord.Interaction):
     """Entra in un canale vocale."""
     is_deferred=True
@@ -275,11 +308,11 @@ async def join(interaction: discord.Interaction):
         await interaction.followup.send("Entro nel canale vocale.", ephemeral = True) 
          
     except Exception as e:
-        send_error(interaction, e)
+        await send_error(e, interaction)
 
 
 @client.tree.command()
-@app_commands.checks.cooldown(1, 5.0, key=lambda i: (i.user.id))
+@app_commands.checks.cooldown(1, 10.0, key=lambda i: (i.user.id))
 async def leave(interaction: discord.Interaction):
     """Esci da un canale vocale"""
     is_deferred=True
@@ -295,14 +328,14 @@ async def leave(interaction: discord.Interaction):
             await interaction.followup.send("Non sono collegato a nessun canale vocale.", ephemeral = True)       
          
     except Exception as e:
-        send_error(interaction, e) 
+        await send_error(e, interaction) 
         
 @speak.error
 @clone.error
 @join.error
 @leave.error
 async def on_generic_error(interaction: discord.Interaction, e: app_commands.AppCommandError):
-    send_error(interaction, e)
+    await send_error(e, interaction, from_generic=True)
 
 logging.info("Starting Models Loading...")
 

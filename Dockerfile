@@ -51,7 +51,6 @@ ADD --chown=user:user hubert $HOME/bark-flask-voice-clone/hubert
 ADD --chown=user:user utils $HOME/bark-flask-voice-clone/utils
 ADD --chown=user:user main.py $HOME/bark-flask-voice-clone/main.py
 ADD --chown=user:user entrypoint.sh $HOME/bark-flask-voice-clone/entrypoint.sh
-ADD --chown=user:user uwsgi.ini $HOME/bark-flask-voice-clone/uwsgi.ini
 RUN mkdir -p $HOME/bark/assets/prompts/.cache/huggingface/download/
 RUN mkdir -p $HOME/bark-flask-voice-clone/bark/assets/prompts/.cache/huggingface/download/
 RUN chmod +x $HOME/bark-flask-voice-clone/entrypoint.sh
