@@ -1,0 +1,16 @@
+discord.py[voice]
+python-dotenv==1.0.0
+tensorboardX
+boto3
+encodec
+funcy
+numpy
+scipy
+tokenizers
+torch
+tqdm
+transformers
+fairseq
+audiolm_pytorch
+ipython
+pydub

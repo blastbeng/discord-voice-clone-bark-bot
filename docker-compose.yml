@@ -1,0 +1,32 @@
+name: discord-voice-clone-bark-bot
+services:
+  discord-voice-clone-bark-bot:
+    pull_policy: build
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: discord-voice-clone-bark-bot
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/Rome
+    volumes:
+      - ".env:/app/.env"
+      - "/tmp/discord-voice-clone-bark-bot:/tmp/discord-voice-clone-bark-bot"
+      - ".env:/home/user/bark-flask-voice-clone/.env"
+      - "cache:/home/user/.cache"
+      - "./data:/home/user/bark-flask-voice-clone/data"
+      - "./bark/assets/prompts:/home/user/bark-flask-voice-clone/bark/assets/prompts"
+      - "/tmp/bark-flask-voice-clone:/tmp/bark-flask-voice-clone"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities:
+                - gpu
+    image: "blastbeng/discord-voice-clone-bark-bot:1.0.0"
+    restart: always
+volumes:
+  cache:
